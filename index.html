@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Общие люди</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f6fb; margin: 0; padding: 20px; }
+    .wrap { max-width: 600px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+    h1 { text-align: center; margin-top: 0; }
+    #messages { height: 380px; overflow-y: auto; border: 1px solid #e1e5ee; border-radius: 8px; padding: 10px; margin-bottom: 12px; background: #fafbfd; }
+    .msg { margin-bottom: 10px; }
+    .msg b { color: #3a5bd9; }
+    .msg span { color: #999; font-size: 12px; margin-left: 6px; }
+    form { display: flex; flex-direction: column; gap: 8px; }
+    input, textarea { padding: 10px; border: 1px solid #ccd3e0; border-radius: 8px; font-size: 15px; }
+    button { padding: 10px; border: none; border-radius: 8px; background: #3a5bd9; color: #fff; font-size: 16px; cursor: pointer; }
+    button:hover { background: #2d48b3; }
+    .link { background: none; color: #3a5bd9; padding: 4px; font-size: 14px; }
+    .hidden { display: none; }
+    #error { color: #c0392b; text-align: center; min-height: 20px; margin-top: 8px; }
+    #userbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Общие люди</h1>
+
+    <div id="authBox">
+      <form id="phoneForm">
+        <input id="phone" type="tel" placeholder="Номер телефона, например +79991234567" required>
+        <button type="submit">Получить код</button>
+      </form>
+      <form id="codeForm" class="hidden">
+        <input id="code" inputmode="numeric" placeholder="Код из SMS" maxlength="6" required>
+        <input id="nick" placeholder="Ник (нужен при первом входе)" maxlength="30">
+        <button type="submit">Войти</button>
+      </form>
+      <div id="recaptcha"></div>
+      <div id="error"></div>
+    </div>
+
+    <div id="chatBox" class="hidden">
+      <div id="userbar">
+        <span id="whoami"></span>
+        <button class="link" id="logoutBtn">Выйти</button>
+      </div>
+      <div id="messages"></div>
+      <form id="chatForm">
+        <textarea id="text" rows="2" placeholder="Напиши сообщение..." maxlength="500" required></textarea>
+        <button type="submit">Отправить</button>
+      </form>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import {
+      getAuth, RecaptchaVerifier, signInWithPhoneNumber,
+      signOut, onAuthStateChanged, updateProfile
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    import { getDatabase, ref, push, onChildAdded } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDsgSCG4BR5cQ73ofTrBEosj-Y307ikcWA",
+      authDomain: "ddiiaa.firebaseapp.com",
+      databaseURL: "https://ddiiaa-default-rtdb.firebaseio.com",
+      projectId: "ddiiaa",
+      storageBucket: "ddiiaa.firebasestorage.app",
+      messagingSenderId: "552019275103",
+      appId: "1:552019275103:web:98fdeb3d9e4e1e81059aea"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getDatabase(app);
+    const messagesRef = ref(db, "messages");
+
+    const authBox = document.getElementById('authBox');
+    const chatBox = document.getElementById('chatBox');
+    const phoneForm = document.getElementById('phoneForm');
+    const codeForm = document.getElementById('codeForm');
+    const errorBox = document.getElementById('error');
+    const box = document.getElementById('messages');
+    const chatForm = document.getElementById('chatForm');
+    let confirmation = null;
+    let chatStarted = false;
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function friendlyError(code) {
+      const map = {
+        'auth/invalid-phone-number': 'Номер указан неверно. Пример: +79991234567',
+        'auth/missing-phone-number': 'Введи номер телефона.',
+        'auth/invalid-verification-code': 'Код неверный. Проверь SMS и попробуй ещё раз.',
+        'auth/code-expired': 'Код устарел. Обнови страницу и запроси новый.',
+        'auth/too-many-requests': 'Слишком много попыток. Подожди немного.',
+        'auth/operation-not-allowed': 'Вход по телефону не включён в Firebase (Sign-in method → Phone).',
+        'auth/unauthorized-domain': 'Этот домен не добавлен в Firebase (Authorized domains).',
+        'auth/captcha-check-failed': 'Проверка reCAPTCHA не прошла. Обнови страницу и попробуй ещё раз.'
+      };
+      return map[code] || 'Что-то пошло не так. Попробуй ещё раз.';
+    }
+
+    const verifier = new RecaptchaVerifier(auth, 'recaptcha', { size: 'invisible' });
+
+    phoneForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      errorBox.textContent = '';
+      const phone = document.getElementById('phone').value.trim();
+      try {
+        confirmation = await signInWithPhoneNumber(auth, phone, verifier);
+        phoneForm.classList.add('hidden');
+        codeForm.classList.remove('hidden');
+      } catch (err) {
+        errorBox.textContent = friendlyError(err.code);
+      }
+    });
+
+    codeForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      errorBox.textContent = '';
+      const code = document.getElementById('code').value.trim();
+      const nick = document.getElementById('nick').value.trim();
+      try {
+        const cred = await confirmation.confirm(code);
+        if (nick && !cred.user.displayName) {
+          await updateProfile(cred.user, { displayName: nick });
+        }
+      } catch (err) {
+        errorBox.textContent = friendlyError(err.code);
+      }
+    });
+
+    document.getElementById('logoutBtn').addEventListener('click', () => signOut(auth));
+
+    onAuthStateChanged(auth, user => {
+      if (user) {
+        authBox.classList.add('hidden');
+        chatBox.classList.remove('hidden');
+        document.getElementById('whoami').textContent = 'Ты в чате как: ' + (user.displayName || user.phoneNumber);
+        if (!chatStarted) {
+          chatStarted = true;
+          onChildAdded(messagesRef, snap => {
+            const m = snap.val();
+            const div = document.createElement('div');
+            div.className = 'msg';
+            div.innerHTML = `<b>${esc(m.nick)}</b><span>${esc(m.time)}</span><div>${esc(m.text)}</div>`;
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
+          });
+        }
+      } else {
+        chatBox.classList.add('hidden');
+        authBox.classList.remove('hidden');
+      }
+    });
+
+    chatForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      const user = auth.currentUser;
+      const text = document.getElementById('text').value.trim();
+      if (!user || !text) return;
+      await push(messagesRef, {
+        nick: user.displayName || user.phoneNumber,
+        uid: user.uid,
+        text,
+        time: new Date().toLocaleString('ru-RU')
+      });
+      document.getElementById('text').value = '';
+    });
+  </script>
+</body>
+</html>
